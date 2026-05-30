@@ -10,9 +10,7 @@ import sys
 from collections.abc import Sequence
 from pathlib import Path
 
-from . import __version__, fetch, walk
-
-_NOT_IMPLEMENTED = "[bdrc-audit] '{cmd}' is not implemented yet."
+from . import __version__, fetch, report, validate, walk
 
 
 def _cmd_walk(args: argparse.Namespace) -> int:
@@ -48,14 +46,34 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
 
 
 def _cmd_validate(args: argparse.Namespace) -> int:
-    print(_NOT_IMPLEMENTED.format(cmd="validate"), file=sys.stderr)
-    print(f"  would validate path={args.path!r}")
+    path = Path(args.path)
+    if not path.exists():
+        print(f"[bdrc-audit] validate failed: no such path {path}", file=sys.stderr)
+        return 1
+    if path.is_file():
+        result = validate.run(path)
+        print(f"{result.work_id}\t{result.status}\t{';'.join(result.reasons)}")
+        return 0
+    rows = report.build_index(path, candidates_csv=Path(args.candidates) if args.candidates else None)
+    out = report.write_index(rows, Path(args.out))
+    counts = {s: sum(1 for r in rows if r["status"] == s) for s in validate.STATUSES}
+    print(
+        f"validate dir={path} files={len(rows)} "
+        f"pass={counts['pass']} warn={counts['warn']} fail={counts['fail']} -> {out}"
+    )
     return 0
 
 
 def _cmd_report(args: argparse.Namespace) -> int:
-    print(_NOT_IMPLEMENTED.format(cmd="report"), file=sys.stderr)
-    print(f"  would build report from {args.index!r} into {args.out!r}")
+    index = Path(args.index)
+    if not index.exists():
+        print(
+            f"[bdrc-audit] report failed: no index {index}; run `bdrc-audit validate` first.",
+            file=sys.stderr,
+        )
+        return 1
+    out = report.run(index, Path(args.out), root=args.root)
+    print(f"report <- {index} -> {out}")
     return 0
 
 
@@ -93,7 +111,15 @@ def build_parser() -> argparse.ArgumentParser:
     p_fetch.set_defaults(func=_cmd_fetch)
 
     p_validate = sub.add_parser("validate", help="Run quality checks on etexts.")
-    p_validate.add_argument("path", help="File or directory of etexts to validate.")
+    p_validate.add_argument("path", help="A .txt file or a directory of etexts.")
+    p_validate.add_argument(
+        "-o", "--out", default="outputs/kangyur_master_index_v0.csv",
+        help="Master index CSV to write (directory mode).",
+    )
+    p_validate.add_argument(
+        "--candidates", default="outputs/rdf_candidates.csv",
+        help="walk candidates CSV to join metadata (utm_id/imagegroup/label).",
+    )
     p_validate.set_defaults(func=_cmd_validate)
 
     p_report = sub.add_parser("report", help="Render a human-readable audit report.")
@@ -101,6 +127,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--index", default="outputs/kangyur_master_index_v0.csv", help="Index CSV."
     )
     p_report.add_argument("-o", "--out", default="outputs/report.md", help="Report path.")
+    p_report.add_argument("--root", default="W22084", help="Root W id for the report title.")
     p_report.set_defaults(func=_cmd_report)
 
     return parser

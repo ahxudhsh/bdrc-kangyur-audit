@@ -20,9 +20,33 @@ def test_no_command_prints_help_and_returns_1(capsys):
     assert "usage:" in out
 
 
-@pytest.mark.parametrize("argv", [["validate", "some/path"], ["report"]])
-def test_stub_subcommands_exit_zero(argv):
-    assert main(argv) == 0
+def test_validate_missing_path_returns_1(tmp_path, capsys):
+    assert main(["validate", str(tmp_path / "nope")]) == 1
+    assert "no such path" in capsys.readouterr().err
+
+
+def test_report_missing_index_returns_1(tmp_path, capsys):
+    assert main(["report", "--index", str(tmp_path / "nope.csv")]) == 1
+    assert "no index" in capsys.readouterr().err
+
+
+def test_validate_then_report_end_to_end(tmp_path):
+    raw = tmp_path / "raw"
+    raw.mkdir()
+    (raw / "MW1_0001.txt").write_text("\u0f56\u0f0d " * 200, encoding="utf-8")
+    (raw / "MW1_0002.txt").write_text("hello world only latin", encoding="utf-8")
+    index = tmp_path / "index.csv"
+    cands = tmp_path / "cands.csv"
+    cands.write_text(
+        "work_id,label,utm_id\nMW1_0001,t1,UTMW1_0001_I0001\n", encoding="utf-8"
+    )
+    assert main(["validate", str(raw), "-o", str(index), "--candidates", str(cands)]) == 0
+    assert index.exists()
+    report_md = tmp_path / "report.md"
+    assert main(["report", "--index", str(index), "-o", str(report_md), "--root", "W1"]) == 0
+    text = report_md.read_text(encoding="utf-8")
+    assert "# Kangyur etext audit — W1" in text
+    assert "Failure taxonomy" in text
 
 
 def test_parser_exposes_all_subcommands():

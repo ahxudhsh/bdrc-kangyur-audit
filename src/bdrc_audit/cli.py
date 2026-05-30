@@ -1,30 +1,49 @@
 """Command-line interface for bdrc-audit.
 
-Day 1 skeleton: the four subcommands (walk / fetch / validate / report) are
-wired to the argument parser but their handlers are stubs. They print a clear
-"not implemented yet" notice and exit 0 so the CLI is demonstrable and the
-plumbing is testable. Real logic is filled in on Days 2-4.
+``walk`` and ``fetch`` are implemented (Day 2, migrated from the branch_a MVP).
+``validate`` and ``report`` remain stubs until Days 3-4.
 """
 from __future__ import annotations
 
 import argparse
 import sys
 from collections.abc import Sequence
+from pathlib import Path
 
-from . import __version__
+from . import __version__, fetch, walk
 
-_NOT_IMPLEMENTED = "[bdrc-audit] '{cmd}' is a Day 1 stub and not implemented yet."
+_NOT_IMPLEMENTED = "[bdrc-audit] '{cmd}' is not implemented yet."
 
 
 def _cmd_walk(args: argparse.Namespace) -> int:
-    print(_NOT_IMPLEMENTED.format(cmd="walk"), file=sys.stderr)
-    print(f"  would walk root={args.root!r} limit={args.limit}")
+    try:
+        result = walk.run(args.root, limit=args.limit, with_labels=not args.no_labels)
+    except Exception as e:  # noqa: BLE001 - surface a clean CLI error
+        print(f"[bdrc-audit] walk failed: {e}", file=sys.stderr)
+        return 1
+    out_path = walk.write_csv(result, Path(args.out))
+    mapped = sum(1 for c in result.candidates if c["utm_id"])
+    print(
+        f"walk root={result.root} mw={result.mw_id} ie={result.ie_id} "
+        f"candidates={len(result.candidates)} utm_mapped={mapped} -> {out_path}"
+    )
     return 0
 
 
 def _cmd_fetch(args: argparse.Namespace) -> int:
-    print(_NOT_IMPLEMENTED.format(cmd="fetch"), file=sys.stderr)
-    print(f"  would fetch ids from {args.input!r} into {args.out_dir!r}")
+    in_path = Path(args.input)
+    if not in_path.exists():
+        print(f"[bdrc-audit] fetch failed: no such candidates file {in_path}", file=sys.stderr)
+        return 1
+    candidates = fetch.load_candidates(in_path)
+    result = fetch.run(candidates, Path(args.out_dir), force=args.force)
+    print(
+        f"fetch total={len(result.outcomes)} downloaded={result.downloaded} "
+        f"skipped={result.skipped} failed={len(result.failed)} -> {args.out_dir}"
+    )
+    if result.failed:
+        print("  failed: " + ", ".join(result.failed[:20]) +
+              (" ..." if len(result.failed) > 20 else ""), file=sys.stderr)
     return 0
 
 
@@ -55,12 +74,21 @@ def build_parser() -> argparse.ArgumentParser:
     p_walk = sub.add_parser("walk", help="Discover sub-works from a root W number.")
     p_walk.add_argument("root", help="Root work id, e.g. W22084.")
     p_walk.add_argument("--limit", type=int, default=None, help="Max candidates.")
+    p_walk.add_argument(
+        "-o", "--out", default="outputs/rdf_candidates.csv", help="Candidates CSV path."
+    )
+    p_walk.add_argument(
+        "--no-labels", action="store_true", help="Skip per-work label lookups (faster)."
+    )
     p_walk.set_defaults(func=_cmd_walk)
 
     p_fetch = sub.add_parser("fetch", help="Download Unicode etexts for sub-works.")
-    p_fetch.add_argument("input", help="Path to candidates file (csv/json).")
+    p_fetch.add_argument("input", help="Candidates CSV from `walk` (work_id, etext_url).")
     p_fetch.add_argument(
         "-o", "--out-dir", default="outputs/raw", help="Output directory."
+    )
+    p_fetch.add_argument(
+        "--force", action="store_true", help="Re-download even if a file exists."
     )
     p_fetch.set_defaults(func=_cmd_fetch)
 
